@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.stats import skew, kurtosis
 import emoji
 
-# --- 1. MOTEUR ANALYTIQUE ÉLITE (15 KPIs) ---
+# --- 1. MOTEUR ANALYTIQUE ÉLITE (16 KPIs) ---
 
 def calculate_elite_metrics(pnl_series, df_bot_f, df_act_f):
     if pnl_series.empty or len(pnl_series) < 2:
@@ -30,6 +30,7 @@ def calculate_elite_metrics(pnl_series, df_bot_f, df_act_f):
         "Max Drawdown": max_dd,
         "Profit Factor": (returns[returns > 0].sum() / abs(returns[returns < 0].sum())) if returns[returns < 0].sum() != 0 else 0,
         "Win Rate %": (len(returns[returns > 0]) / len(returns[returns != 0]) * 100) if len(returns[returns != 0]) > 0 else 0,
+        "Total Volume": df_bot_f['quantity'].sum() if not df_bot_f.empty else 0,
         "Calmar Ratio": abs(total_pnl / max_dd) if max_dd != 0 else 0,
         "Sortino Ratio": (avg_ret / returns[returns < 0].std() * np.sqrt(len(returns))) if not returns[returns < 0].empty and returns[returns < 0].std() != 0 else 0,
         "Recovery Factor": abs(total_pnl / max_dd) if max_dd != 0 else 0,
@@ -116,15 +117,15 @@ def main():
     pnl_series = df_act_f.groupby('timestamp')['profit_and_loss'].sum()
     metrics, dd_series = calculate_elite_metrics(pnl_series, df_bot_f, df_act_f)
 
-    # Affichage des 15 KPIs
+    # Affichage des KPIs
     st.subheader("📊 Fleet Performance Metrics")
     m_cols = st.columns(5)
     for idx, (k, v) in enumerate(metrics.items()):
         m_cols[idx % 5].metric(k, f"{v:,.2f}" if abs(v) > 0.1 else f"{v:.4f}")
 
-    # Onglets
-    t_pnl, t_dist, t_heat, t_corr, t_exec, t_inv, t_tape = st.tabs([
-        "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", "📊 Execution", "📦 Inventory", "📜 Tape"
+    # Onglets (Mise à jour avec l'onglet Volumes)
+    t_pnl, t_dist, t_heat, t_corr, t_exec, t_inv, t_vol, t_tape = st.tabs([
+        "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", "📊 Execution", "📦 Inventory", "📦 Volumes", "📜 Tape"
     ])
 
     with t_pnl:
@@ -155,13 +156,55 @@ def main():
         for s in selected:
             b = df_bot_f[(df_bot_f['symbol'] == s) & (df_bot_f['side'] == 1)]
             s_tr = df_bot_f[(df_bot_f['symbol'] == s) & (df_bot_f['side'] == -1)]
-            vb = (b['price']*b['quantity']).sum()/b['quantity'].sum() if not b.empty else 0
-            vs = (s_tr['price']*s_tr['quantity']).sum()/s_tr['quantity'].sum() if not s_tr.empty else 0
+            vb = (b['price']*b['quantity']).sum()/b['quantity'].sum() if not b.empty and b['quantity'].sum() > 0 else 0
+            vs = (s_tr['price']*s_tr['quantity']).sum()/s_tr['quantity'].sum() if not s_tr.empty and s_tr['quantity'].sum() > 0 else 0
             vwap.append({"Instrument": s, "VWAP Achat": round(vb,2), "VWAP Vente": round(vs,2), "Edge": round(vs-vb,2)})
         st.table(pd.DataFrame(vwap))
 
     with t_inv:
         st.plotly_chart(px.line(df_act_f, x='timestamp', y='position', color='product', title="Position Net Exposure", template="plotly_dark"), use_container_width=True)
+
+    with t_vol:
+        st.subheader("Analyse des Volumes par Produit et par Prix")
+        
+        if not df_bot_f.empty:
+            col_v1, col_v2 = st.columns([1, 2])
+            
+            with col_v1:
+                st.write("**Volume Total Tradé**")
+                total_vol = df_bot_f.groupby('symbol')['quantity'].sum().reset_index()
+                total_vol.columns = ['Produit', 'Volume Total']
+                st.dataframe(total_vol, use_container_width=True, hide_index=True)
+
+            with col_v2:
+                fig_vol_tot = px.bar(total_vol, x='Produit', y='Volume Total', 
+                                    title="Comparaison des Volumes",
+                                    color='Produit', template="plotly_dark")
+                st.plotly_chart(fig_vol_tot, use_container_width=True)
+
+            st.divider()
+            st.write("**Volume Acheté vs Vendu par Niveau de Prix (Market Profile)**")
+            
+            prod_select = st.selectbox("Sélectionner un produit pour le détail", options=selected)
+            df_price_vol = df_bot_f[df_bot_f['symbol'] == prod_select].copy()
+            
+            price_volume = df_price_vol.groupby(['price', 'side'])['quantity'].sum().reset_index()
+            price_volume['Type'] = price_volume['side'].map({1: 'Achat', -1: 'Vente'})
+            
+            fig_price = px.bar(price_volume, 
+                               y="price", 
+                               x="quantity", 
+                               color="Type", 
+                               orientation='h',
+                               title=f"Volume at Price : {prod_select}",
+                               color_discrete_map={'Achat': '#00FFCC', 'Vente': '#FF4B4B'},
+                               labels={'price': 'Prix', 'quantity': 'Volume'},
+                               template="plotly_dark")
+            
+            fig_price.update_layout(barmode='group', height=600)
+            st.plotly_chart(fig_price, use_container_width=True)
+        else:
+            st.warning("Aucune donnée de transaction disponible.")
 
     with t_tape:
         st.subheader("Journal de Transaction Submissions")
