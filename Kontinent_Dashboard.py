@@ -20,7 +20,6 @@ def calculate_elite_metrics(pnl_series, df_bot_f, df_act_f):
     drawdown = pnl_series - pnl_series.cummax()
     max_dd = drawdown.min()
     
-    # Calculs avancés
     std = returns.std()
     avg_ret = returns.mean()
     
@@ -34,16 +33,15 @@ def calculate_elite_metrics(pnl_series, df_bot_f, df_act_f):
         "Calmar Ratio": abs(total_pnl / max_dd) if max_dd != 0 else 0,
         "Sortino Ratio": (avg_ret / returns[returns < 0].std() * np.sqrt(len(returns))) if not returns[returns < 0].empty and returns[returns < 0].std() != 0 else 0,
         "Recovery Factor": abs(total_pnl / max_dd) if max_dd != 0 else 0,
-        "VaR (95%)": np.percentile(returns, 5),
-        "Skewness": skew(returns),
-        "Kurtosis": kurtosis(returns),
+        "VaR (95%)": np.percentile(returns, 5) if not returns.empty else 0,
+        "Skewness": skew(returns) if len(returns) > 2 else 0,
+        "Kurtosis": kurtosis(returns) if len(returns) > 2 else 0,
         "Total Trades": len(df_bot_f),
         "Avg Profit/Trade": total_pnl / len(df_bot_f) if len(df_bot_f) > 0 else 0,
         "Profit/1k Units": (total_pnl / (df_bot_f['quantity'].sum() / 1000)) if not df_bot_f.empty and df_bot_f['quantity'].sum() > 0 else 0,
         "Volatility (Daily)": std
     }
 
-    # Calcul du Slippage moyen
     if not df_bot_f.empty and 'mid_price' in df_act_f.columns:
         df_mid = df_act_f[['timestamp', 'product', 'mid_price']].rename(columns={'product': 'symbol'})
         df_slip = pd.merge_asof(df_bot_f.sort_values('timestamp'), df_mid.sort_values('timestamp'), on='timestamp', by='symbol', direction='backward')
@@ -53,7 +51,7 @@ def calculate_elite_metrics(pnl_series, df_bot_f, df_act_f):
 
     return metrics, drawdown
 
-# --- 2. PARSER UNIVERSEL (TEXTE + JSON) ---
+# --- 2. PARSER UNIVERSEL AVEC NETTOYAGE DES DONNÉES POLLUÉES ---
 
 def universal_prosperity_parser(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -77,6 +75,17 @@ def universal_prosperity_parser(file_path):
         trade_pattern = re.compile(r'\{\s*"timestamp":\s*(\d+),.*?"buyer":\s*"([^"]*)",\s*"seller":\s*"([^"]*)",\s*"symbol":\s*"([^"]*)",.*?"price":\s*([\d\.]+),\s*"quantity":\s*(\d+),?\s*\}', re.DOTALL)
         df_tr = pd.DataFrame([{"timestamp": int(m[0]), "buyer": m[1], "seller": m[2], "symbol": m[3], "price": float(m[4]), "quantity": int(m[5])} for m in trade_pattern.findall(content)])
 
+    # --- CORRECTION : Nettoyage de la pollution mid_price ---
+    if not df_act.empty:
+        df_act = df_act.sort_values(['product', 'timestamp'])
+        # Si le mid_price est nul ou manquant, on le force à NaN pour le ffill
+        mask_bad = (df_act['mid_price'] <= 0) | (df_act['mid_price'].isna())
+        df_act.loc[mask_bad, ['mid_price', 'profit_and_loss']] = np.nan
+        
+        # On remplit les trous par la dernière valeur valide par produit
+        df_act['mid_price'] = df_act.groupby('product')['mid_price'].ffill().fillna(0)
+        df_act['profit_and_loss'] = df_act.groupby('product')['profit_and_loss'].ffill().fillna(0)
+
     if not df_tr.empty:
         df_tr['side'] = df_tr.apply(lambda x: 1 if x['buyer'] == 'SUBMISSION' else (-1 if x['seller'] == 'SUBMISSION' else 0), axis=1)
         df_bot = df_tr[df_tr['side'] != 0].copy()
@@ -85,7 +94,7 @@ def universal_prosperity_parser(file_path):
             df_bot = df_bot.sort_values(['symbol', 'timestamp'])
             df_bot['cum_pos'] = df_bot.groupby('symbol')['pos_change'].cumsum()
             pos_lookup = df_bot[['timestamp', 'symbol', 'cum_pos']].rename(columns={'symbol': 'product'})
-            df_act = pd.merge_asof(df_act.sort_values('timestamp'), pos_lookup.sort_values('timestamp'), on='timestamp', by='product', direction='backward').fillna(0)
+            df_act = pd.merge_asof(df_act.sort_values('timestamp'), pos_lookup.sort_values('timestamp'), on='timestamp', by='product', direction='backward').fillna(method='ffill').fillna(0)
             df_act = df_act.rename(columns={'cum_pos': 'position'})
         return df_act, df_bot
     return df_act, pd.DataFrame()
@@ -110,10 +119,10 @@ def main():
         return
 
     selected = st.sidebar.multiselect("Focus Instruments", options=sorted(df_act['product'].unique()), default=sorted(df_act['product'].unique()))
-    df_act_f = df_act[df_act['product'].isin(selected)]
+    df_act_f = df_act[df_act['product'].isin(selected)].copy()
     df_bot_f = df_bot[df_bot['symbol'].isin(selected)] if not df_bot.empty else pd.DataFrame()
 
-    # Calcul des KPIs
+    # Calcul des KPIs sur des données propres
     pnl_series = df_act_f.groupby('timestamp')['profit_and_loss'].sum()
     metrics, dd_series = calculate_elite_metrics(pnl_series, df_bot_f, df_act_f)
 
@@ -123,7 +132,6 @@ def main():
     for idx, (k, v) in enumerate(metrics.items()):
         m_cols[idx % 5].metric(k, f"{v:,.2f}" if abs(v) > 0.1 else f"{v:.4f}")
 
-    # Onglets (Mise à jour avec l'onglet Volumes)
     t_pnl, t_dist, t_heat, t_corr, t_exec, t_inv, t_vol, t_tape = st.tabs([
         "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", "📊 Execution", "📦 Inventory", "📦 Volumes", "📜 Tape"
     ])
@@ -132,7 +140,7 @@ def main():
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=pnl_series.index, y=pnl_series, name="PNL", line=dict(color='#00FFCC', width=3)))
         fig.add_trace(go.Scatter(x=dd_series.index, y=dd_series, name="Drawdown", fill='tozeroy', line=dict(width=0), opacity=0.3))
-        fig.update_layout(template="plotly_dark", height=500, title="Equity Curve vs Max Drawdown")
+        fig.update_layout(template="plotly_dark", height=500, title="Equity Curve vs Max Drawdown (Cleaned)")
         st.plotly_chart(fig, use_container_width=True)
 
     with t_dist:
@@ -141,8 +149,11 @@ def main():
         st.plotly_chart(fig_hist, use_container_width=True)
 
     with t_heat:
+        # Correction SettingWithCopyWarning
         df_act_f['time_step'] = pd.cut(df_act_f['timestamp'], bins=15, labels=False)
-        heat_pivot = df_act_f.groupby(['product', 'time_step'])['profit_and_loss'].diff().dropna().groupby([df_act_f['product'], df_act_f['time_step']]).sum().unstack()
+        # Calcul du P&L par step plus robuste
+        df_act_f['pnl_diff'] = df_act_f.groupby('product')['profit_and_loss'].diff().fillna(0)
+        heat_pivot = df_act_f.groupby(['product', 'time_step'])['pnl_diff'].sum().unstack()
         fig_h = px.imshow(heat_pivot, color_continuous_scale='RdYlGn', title="Profitability Heatmap (Time vs Product)")
         fig_h.update_layout(template="plotly_dark")
         st.plotly_chart(fig_h, use_container_width=True)
@@ -166,41 +177,23 @@ def main():
 
     with t_vol:
         st.subheader("Analyse des Volumes par Produit et par Prix")
-        
         if not df_bot_f.empty:
             col_v1, col_v2 = st.columns([1, 2])
-            
             with col_v1:
                 st.write("**Volume Total Tradé**")
                 total_vol = df_bot_f.groupby('symbol')['quantity'].sum().reset_index()
                 total_vol.columns = ['Produit', 'Volume Total']
                 st.dataframe(total_vol, use_container_width=True, hide_index=True)
-
             with col_v2:
-                fig_vol_tot = px.bar(total_vol, x='Produit', y='Volume Total', 
-                                    title="Comparaison des Volumes",
-                                    color='Produit', template="plotly_dark")
+                fig_vol_tot = px.bar(total_vol, x='Produit', y='Volume Total', color='Produit', template="plotly_dark")
                 st.plotly_chart(fig_vol_tot, use_container_width=True)
-
-            st.divider()
-            st.write("**Volume Acheté vs Vendu par Niveau de Prix (Market Profile)**")
             
+            st.divider()
             prod_select = st.selectbox("Sélectionner un produit pour le détail", options=selected)
             df_price_vol = df_bot_f[df_bot_f['symbol'] == prod_select].copy()
-            
             price_volume = df_price_vol.groupby(['price', 'side'])['quantity'].sum().reset_index()
             price_volume['Type'] = price_volume['side'].map({1: 'Achat', -1: 'Vente'})
-            
-            fig_price = px.bar(price_volume, 
-                               y="price", 
-                               x="quantity", 
-                               color="Type", 
-                               orientation='h',
-                               title=f"Volume at Price : {prod_select}",
-                               color_discrete_map={'Achat': '#00FFCC', 'Vente': '#FF4B4B'},
-                               labels={'price': 'Prix', 'quantity': 'Volume'},
-                               template="plotly_dark")
-            
+            fig_price = px.bar(price_volume, y="price", x="quantity", color="Type", orientation='h', title=f"Volume at Price : {prod_select}", color_discrete_map={'Achat': '#00FFCC', 'Vente': '#FF4B4B'}, template="plotly_dark")
             fig_price.update_layout(barmode='group', height=600)
             st.plotly_chart(fig_price, use_container_width=True)
         else:
