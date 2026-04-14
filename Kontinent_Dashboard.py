@@ -142,7 +142,7 @@ def main():
 
     with t_heat:
         df_act_f['time_step'] = pd.cut(df_act_f['timestamp'], bins=15, labels=False)
-        heat_pivot = df_act_f.groupby(['product', 'time_step'])['profit_and_loss'].diff().fillna(0).groupby([df_act_f['product'], df_act_f['time_step']]).sum().unstack()
+        heat_pivot = df_act_f.groupby(['product', 'time_step'])['profit_and_loss'].diff().dropna().groupby([df_act_f['product'], df_act_f['time_step']]).sum().unstack()
         fig_h = px.imshow(heat_pivot, color_continuous_scale='RdYlGn', title="Profitability Heatmap (Time vs Product)")
         fig_h.update_layout(template="plotly_dark")
         st.plotly_chart(fig_h, use_container_width=True)
