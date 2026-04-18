@@ -100,7 +100,7 @@ def universal_prosperity_parser(file_path):
 
 def main():
     flag = emoji.emojize(":Cameroon:")
-    st.set_page_config(page_title=f"Kontinent Terminal {flag}", layout="wide")
+    st.set_page_config(page_title=f"Kontinent Terminal {flag}", layout="wide", page_icon="🇨🇲")
     st.title(f"🏛️ Kontinent Elite Terminal {flag}")
 
     uploaded_file = st.sidebar.file_uploader("Charger un log de trading", type=["txt", "log"])
