@@ -73,7 +73,7 @@ def universal_prosperity_parser(file_path):
         if act_match:
             df_act = pd.read_csv(io.StringIO(act_match.group(1).strip()), sep=";")
         trade_pattern = re.compile(r'\{\s*"timestamp":\s*(\d+),.*?"buyer":\s*"([^"]*)",\s*"seller":\s*"([^"]*)",\s*"symbol":\s*"([^"]*)",.*?"price":\s*([\d\.]+),\s*"quantity":\s*(\d+),?\s*\}', re.DOTALL)
-        df_tr = pd.DataFrame([{"buyer": m[1], "seller": m[2], "symbol": m[3], "price": float(m[4]), "quantity": int(m[5])} for m in trade_pattern.findall(content)])
+        df_tr = pd.DataFrame([{"buyer": m[1], "seller": m[2], "symbol": m[3], "price": float(m[4]), "quantity": int(m[5]), "timestamp": int(m[0])} for m in trade_pattern.findall(content)])
 
     if not df_act.empty:
         df_act = df_act.sort_values(['product', 'timestamp'])
@@ -84,7 +84,6 @@ def universal_prosperity_parser(file_path):
 
     if not df_tr.empty:
         df_tr['side'] = df_tr.apply(lambda x: 1 if x['buyer'] == 'SUBMISSION' else (-1 if x['seller'] == 'SUBMISSION' else 0), axis=1)
-        # Calcul de la position pour le bot
         df_bot = df_tr[df_tr['side'] != 0].copy()
         if not df_bot.empty and not df_act.empty:
             df_bot['pos_change'] = df_bot['side'] * df_bot['quantity']
@@ -96,7 +95,27 @@ def universal_prosperity_parser(file_path):
 
     return df_act, df_tr
 
-# --- 3. DASHBOARD INTERFACE ---
+# --- 3. FONCTION DE NETTOYAGE POUR EXPORT BACKTEST ---
+
+def prepare_df_for_backtest(df, day_value=1):
+    """Nettoie le DF pour éviter les erreurs de 'base 10' dans le backtester"""
+    df_fix = df.copy()
+    
+    # 1. Gestion de la colonne Day
+    if 'day' not in df_fix.columns:
+        df_fix.insert(0, 'day', day_value)
+    else:
+        df_fix['day'] = day_value
+
+    # 2. Conversion forcée en entiers pour les colonnes numériques (sauf product/symbol)
+    cols_to_fix = df_fix.select_dtypes(include=[np.number]).columns
+    for col in cols_to_fix:
+        # On passe par float puis int pour supprimer proprement les ".0"
+        df_fix[col] = pd.to_numeric(df_fix[col], errors='coerce').fillna(0).astype(int)
+        
+    return df_fix
+
+# --- 4. DASHBOARD INTERFACE ---
 
 def main():
     flag = emoji.emojize(":cameroon:")
@@ -123,13 +142,13 @@ def main():
     pnl_series = df_act_f.groupby('timestamp')['profit_and_loss'].sum()
     metrics, dd_series = calculate_elite_metrics(pnl_series, df_bot_f, df_act_f)
 
-    # Grille de KPIs (affichage compact des 17 métriques)
+    # Grille de KPIs
     st.subheader("📊 Fleet Performance Metrics")
     m_cols = st.columns(6)
     for idx, (k, v) in enumerate(metrics.items()):
         m_cols[idx % 6].metric(k, f"{v:,.2f}" if abs(v) > 0.1 else f"{v:.4f}")
 
-    # Tabs pour une analyse granulaire
+    # Tabs
     tabs = st.tabs([
         "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", 
         "📊 Execution", "📦 Inventory", "📦 Volumes", "📡 Market Data ( Book)", "📜 Tape"
@@ -180,7 +199,7 @@ def main():
             st.plotly_chart(px.bar(total_vol, x='symbol', y='quantity', title="Volume Total par Produit", template="plotly_dark"), use_container_width=True)
 
     with tabs[7]:
-        st.subheader("📡 Carnet d'ordres Complet (Full Book L1-L3)")
+        st.subheader("📡 Carnet d'ordres Complet (Entiers optimisés pour Backtest)")
         full_book_cols = [
             'day', 'timestamp', 'product', 
             'bid_price_1', 'bid_volume_1', 'bid_price_2', 'bid_volume_2', 'bid_price_3', 'bid_volume_3',
@@ -189,21 +208,28 @@ def main():
         ]
         existing_cols = [c for c in full_book_cols if c in df_act_f.columns]
         market_view = df_act_f[existing_cols].sort_values(['timestamp', 'product'], ascending=[True, True])
-        st.download_button("📥 Télécharger Carnet (CSV)", market_view.to_csv(index=False, sep=';'), "full_order_book.csv", "text/csv")
-        st.dataframe(market_view, use_container_width=True)
+        
+        # Application du fix de conversion et séparateur ;
+        market_view_fixed = prepare_df_for_backtest(market_view)
+        
+        st.download_button("📥 Télécharger Carnet (CSV corrigé ;)", market_view_fixed.to_csv(index=False, sep=';'), "full_order_book_fixed.csv", "text/csv")
+        st.dataframe(market_view_fixed, use_container_width=True)
 
     with tabs[8]:
-        st.subheader("📜 Journal des Transactions (Tape)")
+        st.subheader("📜 Journal des Transactions (Tape corrigé)")
         tape_filter = st.radio("Filtre de flux :", ["Tous les trades", "Mes Trades (Bot)", "Marché uniquement"], horizontal=True)
         if tape_filter == "Mes Trades (Bot)":
-            df_tape = df_tr_f[df_tr_f['side'] != 0]
+            df_tape = df_tr_f[df_tr_f['side'] != 0].copy()
         elif tape_filter == "Marché uniquement":
-            df_tape = df_tr_f[df_tr_f['side'] == 0]
+            df_tape = df_tr_f[df_tr_f['side'] == 0].copy()
         else:
-            df_tape = df_tr_f
+            df_tape = df_tr_f.copy()
 
-        st.download_button("📥 Télécharger Journal (CSV)", df_tape.to_csv(index=False, sep=';'), "tape_history.csv", "text/csv")
-        st.dataframe(df_tape.sort_values('timestamp', ascending=True), use_container_width=True)
+        # Application du fix de conversion et séparateur ;
+        df_tape_fixed = prepare_df_for_backtest(df_tape)
+
+        st.download_button("📥 Télécharger Journal (CSV corrigé ;)", df_tape_fixed.to_csv(index=False, sep=';'), "tape_history_fixed.csv", "text/csv")
+        st.dataframe(df_tape_fixed.sort_values('timestamp', ascending=True), use_container_width=True)
 
 if __name__ == "__main__":
     main()
