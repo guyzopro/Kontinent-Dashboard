@@ -95,22 +95,26 @@ def universal_prosperity_parser(file_path):
 
     return df_act, df_tr
 
-# --- 3. FONCTION DE NETTOYAGE POUR EXPORT BACKTEST ---
+# --- 3. FONCTION DE NETTOYAGE POUR EXPORT ---
 
-def prepare_df_for_backtest(df, day_value=1):
-    """Nettoie le DF pour éviter les erreurs de 'base 10' dans le backtester"""
+def prepare_df_for_export(df, day_value=1, include_day=True):
+    """Nettoie le DF, convertit en entiers et gère la présence de la colonne 'day'"""
     df_fix = df.copy()
     
-    # 1. Gestion de la colonne Day
-    if 'day' not in df_fix.columns:
-        df_fix.insert(0, 'day', day_value)
+    # Gestion de la colonne Day
+    if include_day:
+        if 'day' not in df_fix.columns:
+            df_fix.insert(0, 'day', day_value)
+        else:
+            df_fix['day'] = day_value
     else:
-        df_fix['day'] = day_value
+        if 'day' in df_fix.columns:
+            df_fix = df_fix.drop(columns=['day'])
 
-    # 2. Conversion forcée en entiers pour les colonnes numériques (sauf product/symbol)
+    # Conversion forcée en entiers pour les colonnes numériques (sauf product/symbol)
     cols_to_fix = df_fix.select_dtypes(include=[np.number]).columns
     for col in cols_to_fix:
-        # On passe par float puis int pour supprimer proprement les ".0"
+        # Passage par float puis int pour supprimer proprement les ".0"
         df_fix[col] = pd.to_numeric(df_fix[col], errors='coerce').fillna(0).astype(int)
         
     return df_fix
@@ -127,6 +131,7 @@ def main():
         st.info("Système en attente de données...")
         return
 
+    # Utilisation d'un fichier temporaire
     with open("temp.txt", "wb") as f: f.write(uploaded_file.getbuffer())
     df_act, df_tr = universal_prosperity_parser("temp.txt")
 
@@ -148,7 +153,7 @@ def main():
     for idx, (k, v) in enumerate(metrics.items()):
         m_cols[idx % 6].metric(k, f"{v:,.2f}" if abs(v) > 0.1 else f"{v:.4f}")
 
-    # Tabs
+    # Tabs pour analyse
     tabs = st.tabs([
         "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", 
         "📊 Execution", "📦 Inventory", "📦 Volumes", "📡 Market Data ( Book)", "📜 Tape"
@@ -199,7 +204,7 @@ def main():
             st.plotly_chart(px.bar(total_vol, x='symbol', y='quantity', title="Volume Total par Produit", template="plotly_dark"), use_container_width=True)
 
     with tabs[7]:
-        st.subheader("📡 Carnet d'ordres Complet (Entiers optimisés pour Backtest)")
+        st.subheader("📡 Carnet d'ordres Complet (Inclus Day)")
         full_book_cols = [
             'day', 'timestamp', 'product', 
             'bid_price_1', 'bid_volume_1', 'bid_price_2', 'bid_volume_2', 'bid_price_3', 'bid_volume_3',
@@ -209,16 +214,15 @@ def main():
         existing_cols = [c for c in full_book_cols if c in df_act_f.columns]
         market_view = df_act_f[existing_cols].sort_values(['timestamp', 'product'], ascending=[True, True])
         
-        # Application du fix de conversion et séparateur ;
-        market_view_fixed = prepare_df_for_backtest(market_view)
+        # Inclus la colonne 'day' pour le market book
+        market_view_fixed = prepare_df_for_export(market_view, include_day=True)
         
-        st.download_button("📥 Télécharger Carnet (CSV corrigé ;)", market_view_fixed.to_csv(index=False, sep=';'), "full_order_book_fixed.csv", "text/csv")
+        st.download_button("📥 Télécharger Carnet (CSV ;)", market_view_fixed.to_csv(index=False, sep=';'), "full_order_book.csv", "text/csv")
         st.dataframe(market_view_fixed, use_container_width=True)
 
     with tabs[8]:
-        st.subheader("📜 Journal des Transactions (Tape corrigé)")
+        st.subheader("📜 Journal des Transactions (Tape - Sans Day)")
         tape_filter = st.radio("Filtre de flux :", ["Tous les trades", "Mes Trades (Bot)", "Marché uniquement"], horizontal=True)
-        df_tr_f = df_tr_f.drop(columns=['day'])
         if tape_filter == "Mes Trades (Bot)":
             df_tape = df_tr_f[df_tr_f['side'] != 0].copy()
         elif tape_filter == "Marché uniquement":
@@ -226,10 +230,10 @@ def main():
         else:
             df_tape = df_tr_f.copy()
 
-        # Application du fix de conversion et séparateur ;
-        df_tape_fixed = prepare_df_for_backtest(df_tape)
+        # Exclut explicitement la colonne 'day' pour le Tape
+        df_tape_fixed = prepare_df_for_export(df_tape, include_day=False)
 
-        st.download_button("📥 Télécharger Journal (CSV corrigé ;)", df_tape_fixed.to_csv(index=False, sep=';'), "tape_history_fixed.csv", "text/csv")
+        st.download_button("📥 Télécharger Journal (CSV ;)", df_tape_fixed.to_csv(index=False, sep=';'), "tape_history.csv", "text/csv")
         st.dataframe(df_tape_fixed.sort_values('timestamp', ascending=True), use_container_width=True)
 
 if __name__ == "__main__":
