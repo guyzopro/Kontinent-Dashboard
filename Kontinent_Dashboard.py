@@ -73,7 +73,7 @@ def universal_prosperity_parser(file_path):
         if act_match:
             df_act = pd.read_csv(io.StringIO(act_match.group(1).strip()), sep=";")
         trade_pattern = re.compile(r'\{\s*"timestamp":\s*(\d+),.*?"buyer":\s*"([^"]*)",\s*"seller":\s*"([^"]*)",\s*"symbol":\s*"([^"]*)",.*?"price":\s*([\d\.]+),\s*"quantity":\s*(\d+),?\s*\}', re.DOTALL)
-        df_tr = pd.DataFrame([{"timestamp": int(m[0]), "buyer": m[1], "seller": m[2], "symbol": m[3], "price": float(m[4]), "quantity": int(m[5])} for m in trade_pattern.findall(content)])
+        df_tr = pd.DataFrame([{"buyer": m[1], "seller": m[2], "symbol": m[3], "price": float(m[4]), "quantity": int(m[5])} for m in trade_pattern.findall(content)])
 
     if not df_act.empty:
         df_act = df_act.sort_values(['product', 'timestamp'])
@@ -132,7 +132,7 @@ def main():
     # Tabs pour une analyse granulaire
     tabs = st.tabs([
         "📈 Equity", "📉 Stats", "🔥 Heatmap", "🔗 Correlation", 
-        "📊 Execution", "📦 Inventory", "📦 Volumes", "📡 Market Data (Full Book)", "📜 Tape"
+        "📊 Execution", "📦 Inventory", "📦 Volumes", "📡 Market Data ( Book)", "📜 Tape"
     ])
 
     with tabs[0]:
@@ -182,14 +182,14 @@ def main():
     with tabs[7]:
         st.subheader("📡 Carnet d'ordres Complet (Full Book L1-L3)")
         full_book_cols = [
-            'timestamp', 'product', 
+            'day', 'timestamp', 'product', 
             'bid_price_1', 'bid_volume_1', 'bid_price_2', 'bid_volume_2', 'bid_price_3', 'bid_volume_3',
             'ask_price_1', 'ask_volume_1', 'ask_price_2', 'ask_volume_2', 'ask_price_3', 'ask_volume_3',
-            'mid_price'
+            'mid_price', 'profit_and_loss'
         ]
         existing_cols = [c for c in full_book_cols if c in df_act_f.columns]
         market_view = df_act_f[existing_cols].sort_values(['timestamp', 'product'], ascending=[True, True])
-        st.download_button("📥 Télécharger Carnet (CSV)", market_view.to_csv(index=False), "full_order_book.csv", "text/csv")
+        st.download_button("📥 Télécharger Carnet (CSV)", market_view.to_csv(index=False, sep=';'), "full_order_book.csv", "text/csv")
         st.dataframe(market_view, use_container_width=True)
 
     with tabs[8]:
@@ -203,7 +203,7 @@ def main():
         else:
             df_tape = df_tr_f
 
-        st.download_button("📥 Télécharger Journal (CSV)", df_tape.to_csv(index=False), "tape_history.csv", "text/csv")
+        st.download_button("📥 Télécharger Journal (CSV)", df_tape.to_csv(index=False, sep=';'), "tape_history.csv", "text/csv")
         st.dataframe(df_tape.sort_values('timestamp', ascending=True), use_container_width=True)
 
 if __name__ == "__main__":
