@@ -195,7 +195,7 @@ def main():
     with tabs[8]:
         st.subheader("📜 Journal des Transactions (Tape)")
         tape_filter = st.radio("Filtre de flux :", ["Tous les trades", "Mes Trades (Bot)", "Marché uniquement"], horizontal=True)
-        
+        df_tr_f = df_tr_f.drop(columns=['day'])
         if tape_filter == "Mes Trades (Bot)":
             df_tape = df_tr_f[df_tr_f['side'] != 0]
         elif tape_filter == "Marché uniquement":
