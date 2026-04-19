@@ -188,7 +188,7 @@ def main():
             'mid_price'
         ]
         existing_cols = [c for c in full_book_cols if c in df_act_f.columns]
-        market_view = df_act_f[existing_cols].sort_values(['timestamp', 'product'], ascending=[False, True])
+        market_view = df_act_f[existing_cols].sort_values(['timestamp', 'product'], ascending=[True, True])
         st.download_button("📥 Télécharger Carnet (CSV)", market_view.to_csv(index=False), "full_order_book.csv", "text/csv")
         st.dataframe(market_view, use_container_width=True)
 
@@ -204,7 +204,7 @@ def main():
             df_tape = df_tr_f
 
         st.download_button("📥 Télécharger Journal (CSV)", df_tape.to_csv(index=False), "tape_history.csv", "text/csv")
-        st.dataframe(df_tape.sort_values('timestamp', ascending=False), use_container_width=True)
+        st.dataframe(df_tape.sort_values('timestamp', ascending=True), use_container_width=True)
 
 if __name__ == "__main__":
     main()
